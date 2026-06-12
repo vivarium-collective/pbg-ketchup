@@ -6,7 +6,7 @@ KETCHUP needs the compiled **IPOPT** solver. The simplest route is the bundled
 conda spec:
 
 ```bash
-mamba env create -f third_party/ketchup_pbg_environment.yml
+mamba env create -f environment.yml
 mamba activate pbg-ketchup
 pip install -e .
 pytest

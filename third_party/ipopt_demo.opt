@@ -1,8 +1,0 @@
-tol 0.001
-constr_viol_tol 0.001
-compl_inf_tol 0.001
-mu_strategy adaptive
-max_iter 1500
-max_cpu_time 90
-print_timing_statistics no
-print_user_options no

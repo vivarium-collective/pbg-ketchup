@@ -13,3 +13,7 @@ output/
 results/
 demo/_run/
 demo/report.html.bak
+
+# vendored upstream (unlicensed; resolved on demand at runtime)
+third_party/
+datasets/

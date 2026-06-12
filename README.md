@@ -37,7 +37,7 @@ supported ways to provide it:
 
 ```bash
 # Option A — conda (matches upstream KETCHUP, recommended):
-mamba env create -f third_party/ketchup_pbg_environment.yml
+mamba env create -f environment.yml
 mamba activate pbg-ketchup
 pip install -e .            # add this wrapper into the env
 
@@ -47,10 +47,13 @@ uv pip install -e ".[dev]" idaes-pse
 idaes get-extensions       # downloads an ipopt binary onto PATH
 ```
 
-`ktools` itself ships no PyPI release, so its source is **vendored** under
-`third_party/ktools/` (offline-reproducible). If that copy is ever removed,
-`pbg_ketchup.runtime.ensure_ketchup()` falls back to cloning upstream into a
-cache dir.
+KETCHUP (`ktools`) ships no PyPI release and **no license**, so this package
+does not redistribute its source or datasets. On first use,
+`pbg_ketchup.runtime` clones KETCHUP into a cache dir (`~/.cache/pbg-ketchup`,
+override with `KETCHUP_CACHE`) and copies out only the model files it needs;
+everything after is cached. Developers may instead drop the upstream `ktools`
+source under `third_party/` and the K-FIT xlsx under `datasets/<model>/`
+(both git-ignored) to skip the clone.
 
 > Once installed, the `KetchupEstimator` process registers automatically via
 > `bigraph_schema.package.discover` — no manual `register_link()` is needed.
@@ -132,7 +135,7 @@ r["nadh_fit"]["A1"]                    # fitted NADH(t) for the first condition
 | `solve_ketchup_model(model, options)` (IPOPT) | called inside `update()` |
 | solved Pyomo vars `kf/kr/c/e/rate/error` | read out to output ports |
 | K-FIT `*_model/_mechanism/_data.xlsx` | `datasets/<model>/`, resolved by `runtime` |
-| `ipopt.opt` solver options | `third_party/ipopt.opt` (or per-run override) |
+| `ipopt.opt` solver options | default written to cache, or per-run `solver_options` override |
 
 ## Demo
 
@@ -160,10 +163,11 @@ a collapsible result-document tree. It opens in your browser automatically.
 
 ## Provenance
 
-Bundles a vendored copy of `ktools` and the `k-ecoli74` / `k-ecoli307` /
-`FDH` / `BDH` K-FIT datasets from
-<https://github.com/maranasgroup/KETCHUP> for reproducibility. KETCHUP is the
-work of the Maranas group; cite their publications when using it:
+This wrapper does **not** redistribute KETCHUP. The `ktools` source and the
+`k-ecoli74` / `k-ecoli307` / `FDH` / `BDH` K-FIT datasets are resolved on
+demand from <https://github.com/maranasgroup/KETCHUP> (cloned + cached at
+runtime). KETCHUP is the work of the Maranas group and carries no license of
+its own — consult the authors regarding terms. Cite their publications:
 
 - Gopalakrishnan, Dash & Maranas, *Metab. Eng.* 2020 (K-FIT / steady-state).
 - Hu, Jilani, Olson & Maranas, *PLOS Comput Biol* 2025,

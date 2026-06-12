@@ -8,8 +8,8 @@ log for a convergence trace, and renders an interactive report.
 The solves are deliberately **bounded** (max_iter / max_cpu_time) so the demo
 finishes quickly.  Reported solutions are therefore genuine but *partial* — the
 IPOPT termination condition ('maxIterations'/'maxTimeLimit'/'optimal') is shown
-honestly for each run.  Remove the bound (use the vendored ipopt.opt, max_iter
-5000) to drive a run to full convergence.
+honestly for each run.  Remove the bound (default options use max_iter 5000) to
+drive a run to full convergence.
 """
 
 from __future__ import annotations
@@ -540,7 +540,7 @@ footer {{ text-align:center; color:var(--mut); font-size:12px; padding:30px; }}
       driving a random initial guess onto the steady-state manifold (satisfying
       every rate-law constraint), trading apparent error for feasibility. Charts
       show only normal iterations (restoration-phase sub-iterations are excluded).
-      Use the vendored <code>ipopt.opt</code> (max_iter 5000) for full convergence.</div>
+      The default options (max_iter 5000) drive a run to full convergence.</div>
   </div>
 
   <section id="architecture">
