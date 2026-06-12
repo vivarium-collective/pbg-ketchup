@@ -95,7 +95,7 @@ def dataset_dir(model_name: str) -> Path:
     return base / model_name
 
 
-# Canonical K-FIT filename triples for the models shipped with this wrapper.
+# Canonical K-FIT filename triples for the (static) models shipped here.
 BUNDLED_MODELS = {
     "k-ecoli74": {
         "filename_model": "k-ecoli74_model.xlsx",
@@ -106,5 +106,36 @@ BUNDLED_MODELS = {
         "filename_model": "k-ecoli307_model.xlsx",
         "filename_mechanism": "k-ecoli307_mechanism.xlsx",
         "filename_data": "k-ecoli307_data.xlsx",
+    },
+}
+
+# Dynamic (time-series) cell-free models from the KETCHUP time-series paper
+# (Hu, Jilani, Olson & Maranas, PLOS Comput Biol 2025). Each fits an enzyme's
+# kinetic parameters to a measured NADH(t) trajectory via the 'strainer'
+# time-course data format and a custom rate law.
+BUNDLED_DYNAMIC_MODELS = {
+    "FDH": {  # formate dehydrogenase: NAD+ + HCOO- -> CO2 + NADH
+        "filename_model": "FDH_model.xlsx",
+        "filename_mechanism": "FDH_mechanism.xlsx",
+        "filename_data": "FDH_dataset_series_A1.xlsx",
+        "target_species": "nadh",
+        "strainer_header": {
+            "t_0": ["fdh", "23bdo", "actn", "nad", "formate", "nadh", "co2"],
+            "time": ["nadh"],
+            "type": ["e", "c", "c", "c", "c", "c", "c", "c"],
+            "status": ["i", "g", "g", "i", "i", "i", "i", "d"],
+        },
+    },
+    "BDH": {  # 2,3-butanediol dehydrogenase: acetoin + NADH -> 23BD + NAD+
+        "filename_model": "BDH_model.xlsx",
+        "filename_mechanism": "BDH_mechanism.xlsx",
+        "filename_data": "BDH_dataset_series_Z1.xlsx",
+        "target_species": "nadh",
+        "strainer_header": {
+            "t_0": ["bdh", "23bdo", "actn", "nad", "formate", "nadh", "pyr"],
+            "time": ["nadh"],
+            "type": ["e", "c", "c", "c", "c", "c", "c", "c"],
+            "status": ["i", "g", "g", "i", "i", "i", "i", "d"],
+        },
     },
 }

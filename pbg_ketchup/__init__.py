@@ -6,10 +6,16 @@ and concentrations.  This package bridges the *real* ``ktools`` solver as a
 process-bigraph :class:`~process_bigraph.Step`.
 """
 
-from .processes import KetchupEstimator
+from .processes import KetchupEstimator, KetchupDynamicEstimator
 
 # Importing the composites subpackage fires the @composite_generator decorators.
 from . import composites  # noqa: F401
-from .composites import ketchup_baseline, ketchup_multistart
+from .composites import ketchup_baseline, ketchup_multistart, ketchup_dynamic
 
-__all__ = ["KetchupEstimator", "ketchup_baseline", "ketchup_multistart"]
+__all__ = [
+    "KetchupEstimator",
+    "KetchupDynamicEstimator",
+    "ketchup_baseline",
+    "ketchup_multistart",
+    "ketchup_dynamic",
+]

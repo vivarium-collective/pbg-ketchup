@@ -22,6 +22,7 @@ from typing import Any
 from process_bigraph import Step
 
 from .runtime import (
+    BUNDLED_DYNAMIC_MODELS,
     BUNDLED_MODELS,
     dataset_dir,
     ensure_ketchup,
@@ -254,3 +255,208 @@ class KetchupEstimator(Step):
             return "stable" if np.all(eig.real <= 1e-3) else "unstable"
         except Exception:
             return "not_evaluated"
+
+
+def _flatten_kinetic_parameters(model) -> dict[str, float]:
+    """model.kinetic_parameters (custom mechanism) -> {group.name: value}."""
+    out: dict[str, float] = {}
+    if not hasattr(model, "kinetic_parameters"):
+        return out
+    kp = model.kinetic_parameters
+    for group in kp:
+        inner = kp[group]
+        try:
+            for name in inner:
+                out[f"{group}.{name}"] = _v(inner[name])
+        except TypeError:
+            out[str(group)] = _v(inner)
+    return out
+
+
+class KetchupDynamicEstimator(Step):
+    """Fit enzyme kinetics to **time-course** (NADH-vs-time) data with KETCHUP.
+
+    Implements the dynamic / time-series KETCHUP extension (Hu, Jilani, Olson &
+    Maranas, *PLOS Comput Biol* 2025): a custom-mechanism rate law is fit to a
+    measured species trajectory (NADH) across several initial conditions using
+    the 'strainer' time-course data format.  Bundled cell-free models: ``FDH``
+    (formate dehydrogenase) and ``BDH`` (2,3-butanediol dehydrogenase).
+
+    Like the steady-state estimator this is a one-shot solve, so it is a
+    :class:`process_bigraph.Step` with a drivable ``seed`` input.  Its outputs
+    carry both the fitted parameters and the per-experiment NADH(t) trajectories
+    (fitted curve + measured points) so downstream consumers — or a report — can
+    reproduce the paper's Fig 2 panels.
+
+    Outputs
+    -------
+    kinetic_parameters : map[string, float]
+        Fitted custom-mechanism parameters, keyed ``<group>.<name>``
+        (e.g. ``kcat.FDH+f``).
+    nadh_time, nadh_fit : map[string, list[float]]
+        Per-experiment fitted trajectory: collocation times and predicted NADH.
+    data_time, data_nadh : map[string, list[float]]
+        Per-experiment measured time-points and NADH values.
+    sse : float
+        Total sum-of-squared residuals across experiments (objective).
+    status : string
+        IPOPT termination condition.
+    solve_time : float
+        Wall-clock seconds for generate + solve.
+    n_parameters : integer
+        Number of fitted kinetic parameters.
+    n_experiments : integer
+        Number of initial-condition datasets fit jointly.
+    """
+
+    config_schema = {
+        "model_name": {"_type": "string", "_default": "FDH"},
+        "directory_model": {"_type": "string", "_default": ""},
+        "filename_model": {"_type": "string", "_default": ""},
+        "filename_mechanism": {"_type": "string", "_default": ""},
+        "directory_data": {"_type": "string", "_default": ""},
+        "filename_data": {"_type": "string", "_default": ""},
+        "target_species": {"_type": "string", "_default": "nadh"},
+        "distribution": {"_type": "string", "_default": "uniform"},
+        "seed": {"_type": "integer", "_default": 0},
+        "time_delay": {"_type": "float", "_default": 0.0},
+        "output_dir": {"_type": "string", "_default": ""},
+        "solver_options": {"_type": "string", "_default": ""},
+    }
+
+    def inputs(self):
+        return {"seed": "integer"}
+
+    def outputs(self):
+        return {
+            "kinetic_parameters": "map[string,float]",
+            "nadh_time": "map[string,list[float]]",
+            "nadh_fit": "map[string,list[float]]",
+            "data_time": "map[string,list[float]]",
+            "data_nadh": "map[string,list[float]]",
+            "initial_conditions": "map[string,map[string,float]]",
+            "sse": "float",
+            "status": "string",
+            "solve_time": "float",
+            "n_parameters": "integer",
+            "n_experiments": "integer",
+        }
+
+    def initial_state(self):
+        return {"seed": int(self.config["seed"])}
+
+    def _bundle(self) -> dict:
+        return BUNDLED_DYNAMIC_MODELS.get(self.config["model_name"], {})
+
+    def _build_options(self, seed: int) -> dict:
+        ensure_ketchup()
+        from ktools.ketchup.ketchup import ketchup_model_options
+
+        bundle = self._bundle()
+        name = self.config["model_name"]
+        ddir = self.config["directory_model"] or str(dataset_dir(name))
+        data_ddir = self.config["directory_data"] or str(dataset_dir(name))
+        out_dir = self.config["output_dir"] or os.getcwd()
+        os.makedirs(out_dir, exist_ok=True)
+
+        header = bundle.get("strainer_header")
+        if header is None:
+            raise ValueError(
+                f"No bundled strainer header for dynamic model '{name}'. "
+                f"Known: {list(BUNDLED_DYNAMIC_MODELS)}")
+
+        user_options = {
+            "input_format": "kfit",
+            "data_type": "dynamic",
+            "data_format": "strainer",
+            "mechanism_type": "custom",
+            "distribution": self.config["distribution"],
+            "model_name": name,
+            "directory_model": ddir,
+            "directory_data": data_ddir,
+            "directory_output": out_dir,
+            "filename_model": self.config["filename_model"]
+            or bundle.get("filename_model", f"{name}_model.xlsx"),
+            "filename_mechanism": self.config["filename_mechanism"]
+            or bundle.get("filename_mechanism", f"{name}_mechanism.xlsx"),
+            "filename_data": self.config["filename_data"]
+            or bundle.get("filename_data", f"{name}_dataset.xlsx"),
+            "data_strainer_header": header,
+            "time_delay": self.config["time_delay"],
+            "seedvalue": int(seed),
+            "flag_output_sbml": False,
+            "filename_solver_opt": self.config["solver_options"] or solver_options_file(),
+        }
+        cmd_args = argparse.Namespace(
+            seed=None, solver_options=None, program_options=None, time_delay=None
+        )
+        return ketchup_model_options(user_options, cmd_args)
+
+    def _extract_trajectories(self, model):
+        """Per-experiment fitted curve + measured points for the target species."""
+        target = self.config["target_species"]
+        exp_keys = list(model.data.keys())
+        nadh_time, nadh_fit, data_time, data_nadh = {}, {}, {}, {}
+        initial_conditions = {}
+        total_sse = 0.0
+        for i, key in enumerate(exp_keys):
+            exp = getattr(model, f"experiment{i}")
+            t0 = model.data[key].get("t0", {})
+            initial_conditions[key] = {str(k): float(v) for k, v in t0.items()}
+            # fitted dense trajectory
+            pts = sorted(
+                (float(t), _v(exp.c[(t, target)]))
+                for (t, s) in exp.c.keys() if s == target)
+            nadh_time[key] = [t for t, _ in pts]
+            nadh_fit[key] = [v for _, v in pts]
+            # measured points from the strainer-parsed data
+            meas = model.data[key].get("time", {})
+            tname = "Time" if "Time" in meas else next(
+                (k for k in meas if k.lower().startswith("time")), None)
+            if tname and target in meas:
+                data_time[key] = [float(t) for t in meas[tname]]
+                data_nadh[key] = [float(v) for v in meas[target]]
+            else:
+                data_time[key], data_nadh[key] = [], []
+            try:
+                total_sse += _v(exp.error)
+            except Exception:
+                pass
+        return {
+            "nadh_time": nadh_time, "nadh_fit": nadh_fit,
+            "data_time": data_time, "data_nadh": data_nadh,
+            "initial_conditions": initial_conditions,
+            "sse": float(total_sse), "n_experiments": len(exp_keys),
+        }
+
+    def update(self, state):
+        seed = int(state.get("seed", self.config["seed"]))
+        ensure_ketchup()
+        from ktools.ketchup import ketchup_generate_model, solve_ketchup_model
+
+        options = self._build_options(seed)
+        t0 = time.perf_counter()
+        model = ketchup_generate_model(options)
+        results = solve_ketchup_model(model, options)
+        solve_time = time.perf_counter() - t0
+
+        try:
+            status = str(results.Solver[0]["Termination condition"])
+        except Exception:
+            status = "unknown"
+
+        params = _flatten_kinetic_parameters(model)
+        traj = self._extract_trajectories(model)
+        return {
+            "kinetic_parameters": params,
+            "nadh_time": traj["nadh_time"],
+            "nadh_fit": traj["nadh_fit"],
+            "data_time": traj["data_time"],
+            "data_nadh": traj["data_nadh"],
+            "initial_conditions": traj["initial_conditions"],
+            "sse": traj["sse"],
+            "status": status,
+            "solve_time": float(solve_time),
+            "n_parameters": int(len(params)),
+            "n_experiments": int(traj["n_experiments"]),
+        }

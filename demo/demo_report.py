@@ -28,7 +28,7 @@ REPO = HERE.parent
 sys.path.insert(0, str(REPO))
 
 from process_bigraph import allocate_core  # noqa: E402
-from pbg_ketchup import KetchupEstimator  # noqa: E402
+from pbg_ketchup import KetchupEstimator, KetchupDynamicEstimator  # noqa: E402
 from pbg_ketchup.composites import ketchup_baseline  # noqa: E402
 
 OUT = HERE / "report.html"
@@ -148,6 +148,74 @@ def run_config(cfg: dict) -> dict:
     return {"cfg": cfg, "result": result, "trace": trace, "wall": wall}
 
 
+# ------------------------------------------------------ dynamic (time-series)
+CONFIGS_DYNAMIC = [
+    {
+        "id": "fdh",
+        "title": "FDH",
+        "subtitle": "formate dehydrogenase — NADH production (Fig 2 benchmark)",
+        "description": "KETCHUP's dynamic extension fits a custom Michaelis-Menten "
+        "rate law to NADH(t) across 9 initial conditions (NAD⁺ × formate). "
+        "Reproduces the paper's Fig 2 — fitted curve vs measured points.",
+        "model_name": "FDH",
+        "max_iter": 600,
+        "max_cpu": 60,
+        "max_panels": 9,
+        "accent": "#0891b2",
+    },
+    {
+        "id": "bdh",
+        "title": "BDH",
+        "subtitle": "2,3-butanediol dehydrogenase — NADH consumption",
+        "description": "A reversible convenience-kinetics rate law (Haldane-"
+        "constrained) fit to a separate cell-free assay where NADH is consumed "
+        "(acetoin + NADH → 2,3-BD + NAD⁺) across many initial conditions.",
+        "model_name": "BDH",
+        "max_iter": 3000,
+        "max_cpu": 150,
+        "max_panels": 9,
+        "accent": "#be185d",
+    },
+]
+
+
+def run_dynamic(cfg: dict) -> dict:
+    optfile = WORKDIR / f"{cfg['id']}_dyn_ipopt.opt"
+    optfile.write_text(
+        f"tol 0.001\nconstr_viol_tol 0.001\nmu_strategy adaptive\n"
+        f"max_iter {cfg['max_iter']}\nmax_cpu_time {cfg['max_cpu']}\n"
+        f"print_user_options no\n")
+    step = KetchupDynamicEstimator(
+        config={"model_name": cfg["model_name"], "seed": 0,
+                "solver_options": str(optfile), "output_dir": str(WORKDIR)},
+        core=allocate_core(),
+    )
+    cwd = os.getcwd()
+    os.chdir(WORKDIR)
+    print(f"  running dynamic {cfg['id']} ({cfg['model_name']}) ...", flush=True)
+    t0 = time.perf_counter()
+    try:
+        result = step.update({"seed": 0})
+    finally:
+        os.chdir(cwd)
+    wall = time.perf_counter() - t0
+    print(f"    -> {result['status']} | SSE={result['sse']:.4g} | "
+          f"{result['n_parameters']} params | {result['n_experiments']} datasets "
+          f"| {wall:.1f}s", flush=True)
+    return {"cfg": cfg, "result": result, "wall": wall}
+
+
+def _panel_label(cond: dict) -> str:
+    """Short initial-condition label for a Fig-2 panel."""
+    bits = []
+    for k in ("nad", "formate", "actn", "23bdo"):
+        if k in cond and cond[k]:
+            nice = {"nad": "NAD⁺", "formate": "formate",
+                    "actn": "acetoin", "23bdo": "2,3-BD"}[k]
+            bits.append(f"{cond[k]:g} {nice}")
+    return ", ".join(bits)
+
+
 # ----------------------------------------------------------------------- HTML
 def _fmt(x, n=4):
     try:
@@ -206,10 +274,69 @@ def bigraph_fragment(doc, idx):
         return f'<p class="muted">bigraph-viz2 unavailable: {html.escape(str(exc))}</p>'
 
 
-def build_html(runs) -> str:
+def build_dynamic_section(dr, base_idx, plot_scripts) -> str:
+    """Fig-2-style grid of NADH(t) fit panels for one dynamic run."""
+    cfg, res = dr["cfg"], dr["result"]
+    acc = cfg["accent"]
+    keys = list(res["nadh_fit"].keys())[: cfg["max_panels"]]
+
+    cards = [
+        ("Status", res["status"]),
+        ("Total SSE", _fmt(res["sse"], 4)),
+        ("Parameters", f'{res["n_parameters"]}'),
+        ("Datasets fit", f'{res["n_experiments"]}'),
+        ("Solve time", f'{dr["wall"]:.1f} s'),
+    ]
+    card_html = "".join(
+        f'<div class="card"><div class="cv" style="color:{acc}">'
+        f'{html.escape(str(v))}</div><div class="cl">{k}</div></div>'
+        for k, v in cards)
+
+    panels = []
+    for j, key in enumerate(keys):
+        pid = f"dyn_{cfg['id']}_{j}"
+        cond = res["initial_conditions"].get(key, {})
+        label = _panel_label(cond) or key
+        plot_scripts.append(f"""
+        Plotly.newPlot('{pid}', [
+          {{x: {json.dumps([round(t,3) for t in res['data_time'][key]])},
+            y: {json.dumps([round(v,4) for v in res['data_nadh'][key]])},
+            mode:'markers', name:'measured',
+            marker:{{color:'#dc2626', size:5, opacity:0.75}}}},
+          {{x: {json.dumps([round(t,3) for t in res['nadh_time'][key]])},
+            y: {json.dumps([round(v,4) for v in res['nadh_fit'][key]])},
+            mode:'lines', name:'KETCHUP fit', line:{{color:'{acc}', width:2}}}}
+        ], {{margin:{{t:24,r:8,l:42,b:30}}, height:210, showlegend:false,
+            title:{{text:'{html.escape(label)}', font:{{size:11}}, x:0.5}},
+            xaxis:{{title:{{text:'time (min)', font:{{size:10}}}}}},
+            yaxis:{{title:{{text:'NADH (mM)', font:{{size:10}}}}}}}},
+            {{displayModeBar:false}});""")
+        panels.append(f'<div class="dpanel"><div id="{pid}"></div></div>')
+
+    kp_view = {k: round(v, 4) for k, v in list(res["kinetic_parameters"].items())}
+    return f"""
+    <section id="{cfg['id']}">
+      <div class="shead" style="border-color:{acc}">
+        <h2>{html.escape(cfg['title'])} · time-series fit</h2>
+        <p class="sub">{html.escape(cfg['subtitle'])}</p>
+      </div>
+      <p class="desc">{html.escape(cfg['description'])}</p>
+      <div class="cards">{card_html}</div>
+      <div class="panel"><h3>NADH(t): KETCHUP fit (line) vs measured (points)</h3>
+        <div class="dgrid">{''.join(panels)}</div></div>
+      <div class="panel"><h3>Fitted kinetic parameters</h3>
+        <pre class="tree">{json_tree(kp_view)}</pre></div>
+    </section>"""
+
+
+def build_html(runs, dyn_runs=None) -> str:
+    dyn_runs = dyn_runs or []
     nav = "".join(
         f'<a href="#{r["cfg"]["id"]}">{html.escape(r["cfg"]["title"])}</a>'
         for r in runs)
+    nav += "".join(
+        f'<a href="#{d["cfg"]["id"]}">{html.escape(d["cfg"]["title"])} (t)</a>'
+        for d in dyn_runs)
 
     # one composite document for the architecture diagram
     arch_doc = ketchup_baseline(model_name="k-ecoli74", seed=0)
@@ -317,7 +444,11 @@ def build_html(runs) -> str:
             <pre class="tree">{json_tree(doc_view)}</pre></div>
         </section>""")
 
-    runtime_total = sum(r["wall"] for r in runs)
+    dyn_sections = [build_dynamic_section(d, i, plot_scripts)
+                    for i, d in enumerate(dyn_runs)]
+
+    runtime_total = (sum(r["wall"] for r in runs)
+                     + sum(d["wall"] for d in dyn_runs))
     generated = time.strftime("%Y-%m-%d %H:%M")
 
     return f"""<!doctype html>
@@ -373,6 +504,12 @@ pre.tree {{ font-family:'SF Mono',Menlo,Consolas,monospace; font-size:12.5px;
 .tog.collapsed::before {{ content:'▸ '; }}
 .tog.collapsed + .blk {{ display:none; }}
 .blk {{ display:block; }}
+.dgrid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }}
+@media (max-width:760px) {{ .dgrid {{ grid-template-columns:1fr; }} }}
+.dpanel {{ border:1px solid var(--line); border-radius:8px; padding:4px; }}
+.parthead {{ margin:34px 0 18px; padding:6px 0 4px; border-bottom:2px solid #cbd5e1; }}
+.parthead h2 {{ margin:0; font-size:16px; color:#475569; letter-spacing:0.04em;
+  text-transform:uppercase; }}
 footer {{ text-align:center; color:var(--mut); font-size:12px; padding:30px; }}
 </style></head><body>
 <header class="top">
@@ -389,9 +526,13 @@ footer {{ text-align:center; color:var(--mut); font-size:12px; padding:30px; }}
       metabolite concentrations. <code>KetchupEstimator</code> bridges the genuine
       <code>ktools</code> solver — its <code>update()</code> builds the real Pyomo
       model and calls IPOPT; nothing here is reimplemented or mocked.</p>
-    <p>Below: the real solver run on two K-FIT <i>E. coli</i> models —
-      <code>k-ecoli74</code> and <code>k-ecoli307</code> — plus a multistart
-      re-fit driven through the Step's <code>seed</code> input port.</p>
+    <p>Two capabilities are shown. <b>Part I — steady-state</b>: large-scale
+      flux fitting on two K-FIT <i>E. coli</i> models (<code>k-ecoli74</code>,
+      <code>k-ecoli307</code>) plus a seed-driven multistart. <b>Part II —
+      time-series</b>: the dynamic KETCHUP extension (Hu, Jilani, Olson &amp;
+      Maranas, <i>PLOS Comput Biol</i> 2025) fitting cell-free enzyme kinetics
+      (FDH, BDH) to NADH-vs-time data — reproducing the paper's Fig 2 via a
+      second Step, <code>KetchupDynamicEstimator</code>.</p>
     <div class="note">Solves are bounded (max_iter / max_cpu_time) so the demo
       finishes in ~{runtime_total:.0f}s total — reported solutions are genuine but
       <b>partial</b>, and each run's IPOPT termination condition is shown as-is.
@@ -411,9 +552,14 @@ footer {{ text-align:center; color:var(--mut); font-size:12px; padding:30px; }}
     <div class="panel">{arch_frag}</div>
   </section>
 
+  <div class="parthead"><h2>Part I · Steady-state flux estimation</h2></div>
   {''.join(sections)}
-  <footer>Generated {generated} · {len(runs)} real IPOPT runs ·
-    total solver wall-time {runtime_total:.1f}s · pbg-ketchup v0.1.0</footer>
+
+  <div class="parthead"><h2>Part II · Time-series (dynamic) estimation</h2></div>
+  {''.join(dyn_sections)}
+
+  <footer>Generated {generated} · {len(runs)} steady-state + {len(dyn_runs)} dynamic
+    real IPOPT runs · total solver wall-time {runtime_total:.1f}s · pbg-ketchup v0.1.0</footer>
 </main>
 <script>
 document.querySelectorAll('.tog').forEach(function(t){{
@@ -425,10 +571,12 @@ document.querySelectorAll('.tog').forEach(function(t){{
 
 
 def main():
-    print("Running real KETCHUP/IPOPT estimations (bounded) ...")
+    print("Part I: steady-state KETCHUP/IPOPT estimations (bounded) ...")
     runs = [run_config(cfg) for cfg in CONFIGS]
+    print("Part II: dynamic (time-series) KETCHUP/IPOPT estimations ...")
+    dyn_runs = [run_dynamic(cfg) for cfg in CONFIGS_DYNAMIC]
     print("Rendering report ...")
-    OUT.write_text(build_html(runs))
+    OUT.write_text(build_html(runs, dyn_runs))
     print(f"Wrote {OUT}")
     webbrowser.open("file://" + str(OUT))
 

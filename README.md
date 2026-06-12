@@ -11,9 +11,17 @@ perturbed conditions. This package bridges the **real** `ktools` solver as a
 process-bigraph `Step` — `update()` builds the genuine Pyomo model and calls
 IPOPT. Nothing is reimplemented or mocked.
 
-Two K-FIT *E. coli* models are bundled and ready to fit out of the box:
-`k-ecoli74` (74-reaction core metabolism) and `k-ecoli307` (307 reactions,
-~2,500 rate constants).
+Two modes are wrapped:
+
+- **Steady-state** (`KetchupEstimator`) — large-scale flux fitting. Two K-FIT
+  *E. coli* models are bundled: `k-ecoli74` (74-reaction core metabolism) and
+  `k-ecoli307` (307 reactions, ~2,500 rate constants).
+- **Time-series / dynamic** (`KetchupDynamicEstimator`) — the cell-free
+  time-course extension from Hu, Jilani, Olson & Maranas, *PLOS Comput Biol*
+  2025 ([10.1371/journal.pcbi.1013724](https://doi.org/10.1371/journal.pcbi.1013724)).
+  Fits a custom rate law to a measured NADH(t) trajectory across many initial
+  conditions. Two cell-free enzyme models bundled: `FDH` (formate
+  dehydrogenase) and `BDH` (2,3-butanediol dehydrogenase).
 
 ## Why a `Step` (not a `Process`)?
 
@@ -94,10 +102,27 @@ Key config: `model_name` (`k-ecoli74` / `k-ecoli307`), explicit
 `directory_model` / `filename_*` overrides for your own K-FIT models,
 `solver_options` (IPOPT options-file path), `output_dir`, `compute_stability`.
 
+### `KetchupDynamicEstimator(Step)` — time-series fitting
+
+Same `seed` input. Outputs `kinetic_parameters: map[string,float]` (custom-
+mechanism params keyed `<group>.<name>`), per-experiment trajectories
+`nadh_time` / `nadh_fit` / `data_time` / `data_nadh` (`map[string,list[float]]`)
+and `initial_conditions` (`map[string,map[string,float]]`), plus `sse`,
+`status`, `solve_time`, `n_parameters`, `n_experiments`. Bundled `model_name`:
+`FDH`, `BDH`.
+
+```python
+from pbg_ketchup import KetchupDynamicEstimator
+step = KetchupDynamicEstimator(config={"model_name": "FDH"}, core=allocate_core())
+r = step.update({"seed": 0})          # ~1.5 s to optimal, SSE ~0.01
+r["nadh_fit"]["A1"]                    # fitted NADH(t) for the first condition
+```
+
 ### Composite generators (dashboard-visible)
 
 - `ketchup_baseline(model_name, seed, solver_options, output_dir)` — fit one model.
 - `ketchup_multistart(model_name, seed, ...)` — re-fit from an alternate seed.
+- `ketchup_dynamic(model_name, seed, ...)` — time-series fit (FDH / BDH).
 
 ## Architecture mapping
 
@@ -127,13 +152,20 @@ a collapsible result-document tree. It opens in your browser automatically.
   honestly). Remove the bound for full convergence.
 - **IPOPT required.** No solver → no fit. Tests that need it `skip` rather than
   fail when IPOPT is absent.
-- Only `static` (steady-state) K-FIT estimation is wired; KETCHUP also supports
-  dynamic/time-series fits (`KETCHUP_dynamic.py`) not yet exposed here.
-- Output maps surface the **first** experiment block; full per-experiment detail
-  remains available on the underlying Pyomo model.
+- The steady-state estimator's scalar/map outputs surface the **first**
+  experiment block; full per-experiment detail remains on the Pyomo model.
+- The dynamic estimator currently targets NADH-tracked single-enzyme cell-free
+  models (FDH/BDH). The paper's time-lag-reconciliation utility and the binary
+  FDH-BDH forward simulation are not yet wrapped.
 
 ## Provenance
 
-Bundles a vendored copy of `ktools` and the `k-ecoli74` / `k-ecoli307` K-FIT
-datasets from <https://github.com/maranasgroup/KETCHUP> for reproducibility.
-KETCHUP is the work of the Maranas group; cite their publications when using it.
+Bundles a vendored copy of `ktools` and the `k-ecoli74` / `k-ecoli307` /
+`FDH` / `BDH` K-FIT datasets from
+<https://github.com/maranasgroup/KETCHUP> for reproducibility. KETCHUP is the
+work of the Maranas group; cite their publications when using it:
+
+- Gopalakrishnan, Dash & Maranas, *Metab. Eng.* 2020 (K-FIT / steady-state).
+- Hu, Jilani, Olson & Maranas, *PLOS Comput Biol* 2025,
+  [10.1371/journal.pcbi.1013724](https://doi.org/10.1371/journal.pcbi.1013724)
+  (time-series / cell-free extension).
