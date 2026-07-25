@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pbg_superpowers.composite_generator import composite_generator
+from viva_superpowers.composite_generator import composite_generator
 
 
 def _estimation_document(*, model_name, seed, solver_options, output_dir):
