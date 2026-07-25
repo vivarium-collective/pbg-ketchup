@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from viva_superpowers.composite_generator import composite_generator
+from pbg_superpowers.composite_generator import composite_generator
 
 
 @composite_generator(
