@@ -4,7 +4,7 @@ from pbg_ketchup.composites import ketchup_baseline, ketchup_multistart
 
 
 def test_generators_registered():
-    from viva_superpowers.composite_generator import _REGISTRY
+    from pbg_superpowers.composite_generator import _REGISTRY
 
     for suffix in ("ketchup_baseline", "ketchup_multistart"):
         matches = [eid for eid in _REGISTRY if eid.endswith(f".{suffix}")]
