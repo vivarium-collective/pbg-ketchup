@@ -1,0 +1,40 @@
+name: readme-check
+
+# README.md's composites table is generated from the workspace by
+# `vivarium-workbench gen-readme` (the ecosystem-wide command). This gate fails
+# if a composite change left the table stale.
+# Regenerate locally with: vivarium-workbench gen-readme --workspace .
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  readme-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install workspace + vivarium-workbench
+        # gen-readme imports the workspace package to enumerate composites; the
+        # module import does NOT need the IPOPT solver (only solve-time does).
+        run: |
+          uv venv
+          uv pip install -e .
+          uv pip install "vivarium-workbench @ git+https://github.com/vivarium-collective/vivarium-workbench.git@main"
+
+      - name: Check README composites table is fresh
+        run: |
+          source .venv/bin/activate
+          vivarium-workbench gen-readme --workspace "$PWD" --check
